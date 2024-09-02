@@ -10,6 +10,7 @@ import { TestTransactionsComponent } from './components/test-transactions/test-t
 import { CalculatorComponent } from './components/calculator/calculator.component';
 import { BlocksList } from './components/blocks-list/blocks-list.component';
 import { RbfList } from './components/rbf-list/rbf-list.component';
+import { StratumList } from './components/stratum/jobs-list/stratum-list.component';
 import { ServerHealthComponent } from './components/server-health/server-health.component';
 import { ServerStatusComponent } from './components/server-health/server-status.component';
 import { FaucetComponent } from './components/faucet/faucet.component'
@@ -55,6 +56,10 @@ const routes: Routes = [
       {
         path: 'rbf',
         component: RbfList,
+      },
+      {
+        path: 'stratum',
+        component: StratumList,
       },
       {
         path: 'terms-of-service',
