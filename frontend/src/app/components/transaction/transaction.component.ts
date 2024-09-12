@@ -358,12 +358,18 @@ export class TransactionComponent implements OnInit, AfterViewInit, OnDestroy {
       }),
     ).subscribe((accelerationHistory) => {
       for (const acceleration of accelerationHistory) {
-        if (acceleration.txid === this.txId && (acceleration.status === 'completed' || acceleration.status === 'completed_provisional')) {
-          const boostCost = acceleration.boostCost || acceleration.bidBoost;
-          acceleration.acceleratedFeeRate = Math.max(acceleration.effectiveFee, acceleration.effectiveFee + boostCost) / acceleration.effectiveVsize;
-          acceleration.boost = boostCost;
-          this.tx.acceleratedAt = acceleration.added;
-          this.accelerationInfo = acceleration;
+        if (acceleration.txid === this.txId) {
+          if (acceleration.status === 'completed' || acceleration.status === 'completed_provisional') {
+            if (acceleration.pools.includes(acceleration.minedByPoolUniqueId)) {
+              const boostCost = acceleration.boostCost || acceleration.bidBoost;
+              acceleration.acceleratedFeeRate = Math.max(acceleration.effectiveFee, acceleration.effectiveFee + boostCost) / acceleration.effectiveVsize;
+              acceleration.boost = boostCost;
+              this.tx.acceleratedAt = acceleration.added;
+              this.accelerationInfo = acceleration;  
+            } else {
+              this.tx.feeDelta = undefined;
+            }
+          }
           this.waitingForAccelerationInfo = false;
           this.setIsAccelerated();
         }
@@ -895,7 +901,7 @@ export class TransactionComponent implements OnInit, AfterViewInit, OnDestroy {
       this.segwitEnabled = !this.tx.status.confirmed || isFeatureActive(this.stateService.network, this.tx.status.block_height, 'segwit');
       this.taprootEnabled = !this.tx.status.confirmed || isFeatureActive(this.stateService.network, this.tx.status.block_height, 'taproot');
       this.rbfEnabled = !this.tx.status.confirmed || isFeatureActive(this.stateService.network, this.tx.status.block_height, 'rbf');
-      this.tx.flags = getTransactionFlags(this.tx);
+      this.tx.flags = getTransactionFlags(this.tx, null, null, this.tx.status?.block_time, this.stateService.network);
       this.filters = this.tx.flags ? toFilters(this.tx.flags).filter(f => f.txPage) : [];
       this.checkAccelerationEligibility();
     } else {
