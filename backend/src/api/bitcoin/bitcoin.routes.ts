@@ -21,6 +21,7 @@ import transactionRepository from '../../repositories/TransactionRepository';
 import rbfCache from '../rbf-cache';
 import { calculateMempoolTxCpfp } from '../cpfp';
 import { handleError } from '../../utils/api';
+import poolsUpdater from '../../tasks/pools-updater';
 
 const TXID_REGEX = /^[a-f0-9]{64}$/i;
 const BLOCK_HASH_REGEX = /^[a-f0-9]{64}$/i;
@@ -54,8 +55,14 @@ class BitcoinRoutes {
       .post(config.MEMPOOL.API_URL_PREFIX + 'psbt/addparents', this.postPsbtCompletion)
       .get(config.MEMPOOL.API_URL_PREFIX + 'blocks-bulk/:from', this.getBlocksByBulk.bind(this))
       .get(config.MEMPOOL.API_URL_PREFIX + 'blocks-bulk/:from/:to', this.getBlocksByBulk.bind(this))
+      .post(config.MEMPOOL.API_URL_PREFIX + 'prevouts', this.$getPrevouts)
+      .post(config.MEMPOOL.API_URL_PREFIX + 'cpfp', this.getCpfpLocalTxs)
       // Temporarily add txs/package endpoint for all backends until esplora supports it
       .post(config.MEMPOOL.API_URL_PREFIX + 'txs/package', this.$submitPackage)
+      // Internal routes
+      .get(config.MEMPOOL.API_URL_PREFIX + 'internal/blocks/definition/list', this.getBlockDefinitionHashes)
+      .get(config.MEMPOOL.API_URL_PREFIX + 'internal/blocks/definition/current', this.getCurrentBlockDefinitionHash)
+      .get(config.MEMPOOL.API_URL_PREFIX + 'internal/blocks/:definitionHash', this.getBlocksByDefinitionHash)
       ;
 
       if (config.MEMPOOL.BACKEND !== 'esplora') {
@@ -739,6 +746,52 @@ class BitcoinRoutes {
     }
   }
 
+  private async getBlockDefinitionHashes(req: Request, res: Response): Promise<void> {
+    try {
+      const result = await blocks.$getBlockDefinitionHashes();
+      if (!result) {
+        handleError(req, res, 503, `Service Temporarily Unavailable`);
+        return;
+      }
+      res.setHeader('content-type', 'application/json');
+      res.send(result);
+    } catch (e) {
+      handleError(req, res, 500, e instanceof Error ? e.message : e);
+    }
+  }
+
+  private async getCurrentBlockDefinitionHash(req: Request, res: Response): Promise<void> {
+    try {
+      const currentSha = await poolsUpdater.getShaFromDb();
+      if (!currentSha) {
+        handleError(req, res, 503, `Service Temporarily Unavailable`);
+        return;
+      }
+      res.setHeader('content-type', 'text/plain');
+      res.send(currentSha);
+    } catch (e) {
+      handleError(req, res, 500, e instanceof Error ? e.message : e);
+    }
+  }
+
+  private async getBlocksByDefinitionHash(req: Request, res: Response): Promise<void> {
+    try {
+      if (typeof(req.params.definitionHash) !== 'string') {
+        res.status(400).send('Parameter "hash" must be a valid string');
+        return;
+      }
+      const blocksHash = await blocks.$getBlocksByDefinitionHash(req.params.definitionHash as string);
+      if (!blocksHash) {
+        handleError(req, res, 503, `Service Temporarily Unavailable`);
+        return;
+      }
+      res.setHeader('content-type', 'application/json');
+      res.send(blocksHash);
+    } catch (e) {
+      handleError(req, res, 500, e instanceof Error ? e.message : e);
+    }
+  }
+
   private getBlockTipHeight(req: Request, res: Response) {
     try {
       const result = blocks.getCurrentBlockHeight();
@@ -930,6 +983,92 @@ class BitcoinRoutes {
     }
   }
 
+  private async $getPrevouts(req: Request, res: Response) {
+    try {
+      const outpoints = req.body;
+      if (!Array.isArray(outpoints) || outpoints.some((item) => !/^[a-fA-F0-9]{64}$/.test(item.txid) || typeof item.vout !== 'number')) {
+        handleError(req, res, 400, 'Invalid outpoints format');
+        return;
+      }
+
+      if (outpoints.length > 100) {
+        handleError(req, res, 400, 'Too many outpoints requested');
+        return;
+      }
+
+      const result = Array(outpoints.length).fill(null);
+      const memPool = mempool.getMempool();
+
+      for (let i = 0; i < outpoints.length; i++) {
+        const outpoint = outpoints[i];
+        let prevout: IEsploraApi.Vout | null = null;
+        let unconfirmed: boolean | null = null;
+
+        const mempoolTx = memPool[outpoint.txid];
+        if (mempoolTx) {
+          if (outpoint.vout < mempoolTx.vout.length) {
+            prevout = mempoolTx.vout[outpoint.vout];
+            unconfirmed = true;
+          }
+        } else {
+          try {
+            const rawPrevout = await bitcoinClient.getTxOut(outpoint.txid, outpoint.vout, false);
+            if (rawPrevout) {
+              prevout = {
+                value: Math.round(rawPrevout.value * 100000000),
+                scriptpubkey: rawPrevout.scriptPubKey.hex,
+                scriptpubkey_asm: rawPrevout.scriptPubKey.asm ? transactionUtils.convertScriptSigAsm(rawPrevout.scriptPubKey.hex) : '',
+                scriptpubkey_type: transactionUtils.translateScriptPubKeyType(rawPrevout.scriptPubKey.type),
+                scriptpubkey_address: rawPrevout.scriptPubKey && rawPrevout.scriptPubKey.address ? rawPrevout.scriptPubKey.address : '',
+              };
+              unconfirmed = false;
+            }
+          } catch (e) {
+            // Ignore bitcoin client errors, just leave prevout as null
+          }
+        }
+
+        if (prevout) {
+          result[i] = { prevout, unconfirmed };
+        }
+      }
+
+      res.json(result);
+
+    } catch (e) {
+      handleError(req, res, 500, 'Failed to get prevouts');
+    }
+  }
+
+  private getCpfpLocalTxs(req: Request, res: Response) {
+    try {
+      const transactions = req.body;
+
+      if (!Array.isArray(transactions) || transactions.some(tx =>
+        !tx || typeof tx !== 'object' ||
+        !/^[a-fA-F0-9]{64}$/.test(tx.txid) ||
+        typeof tx.weight !== 'number' ||
+        typeof tx.sigops !== 'number' ||
+        typeof tx.fee !== 'number' ||
+        !Array.isArray(tx.vin) ||
+        !Array.isArray(tx.vout)
+      )) {
+        handleError(req, res, 400, 'Invalid transactions format');
+        return;
+      }
+
+      if (transactions.length > 1) {
+        handleError(req, res, 400, 'More than one transaction is not supported yet');
+        return;
+      }
+
+      const cpfpInfo = calculateMempoolTxCpfp(transactions[0], mempool.getMempool(), true);
+      res.json([cpfpInfo]);
+
+    } catch (e) {
+      handleError(req, res, 500, 'Failed to calculate CPFP info');
+    }
+  }
 }
 
 export default new BitcoinRoutes();
