@@ -1,0 +1,4 @@
+
+npm install axios@^1.12.0
+# or if you use Yarn
+yarn add axios@^1.12.0
