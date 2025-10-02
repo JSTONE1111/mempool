@@ -175,7 +175,7 @@
 
   <!-- Stratum Job -->
   <ng-container *ngIf="(job$ | async) as job;">
-    <h2 i18n="pool.next_block">Next block</h2>
+    <h2 i18n="@@bdf0e930eb22431140a2eaeacd809cc5f8ebd38c">Next Block</h2>
     <div class="box mb-3">
       <div class="row" >
         <div class="col">
@@ -219,9 +219,8 @@
                   <table class="job-table table table-xs table-borderless table-fixed table-data">
                     <thead>
                       <tr>
-                        <th class="data-title clip text-center coinbase" i18n="latest-blocks.coinbasetag">
-                          <a class="title-link" [routerLink]="['/tx/preview' | relativeUrl]" [fragment]="'offline=true&tx=' + job.coinbase">
-                            Coinbase tag <span>&nbsp;</span>
+                        <th class="data-title clip text-center coinbase">
+                          <a class="title-link" [routerLink]="['/tx/preview' | relativeUrl]" [fragment]="'offline=true&tx=' + job.coinbase"><ng-template i18n="latest-blocks.coinbasetag">Coinbase tag</ng-template><span> &nbsp;</span>
                             <fa-icon [icon]="['fas', 'external-link-alt']" [fixedWidth]="true" style="vertical-align: text-top; font-size: 13px; color: var(--title-fg)"></fa-icon>
                           </a>
                         </th>
